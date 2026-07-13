@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Format & Lint: läuft einmal, schnell.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust einrichten
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - name: Format prüfen
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # Build & Test auf allen drei Betriebssystemen (amd64).
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust einrichten
+        run: rustup toolchain install stable --profile minimal
+      - name: Build
+        run: cargo build --workspace --verbose
+      - name: Test
+        run: cargo test --workspace --verbose
+
+  # Cross-Compilation für weitere Architekturen (nur Build, Ziel: Baubarkeit sichern).
+  cross:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-unknown-linux-gnu   # ARM64
+          - i686-unknown-linux-gnu      # 32-Bit x86 (best-effort)
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust + Cross-Target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add ${{ matrix.target }}
+          cargo install cross --locked || true
+      - name: Cross-Build
+        run: cross build --workspace --target ${{ matrix.target }} || cargo build --workspace --target ${{ matrix.target }}
+        continue-on-error: true   # ARM/32-Bit sind nachrangig (siehe PLAN.md §4)

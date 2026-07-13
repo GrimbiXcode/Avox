@@ -1,0 +1,13 @@
+[package]
+name = "avox-ipc"
+description = "Gemeinsame Nachrichten-Typen für die IPC zwischen Avox-Service und GUI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+avox-core.workspace = true
+# JSON-RPC-Serialisierung (serde/serde_json) wird in M2 ergänzt; hier zunächst nur die Typen.

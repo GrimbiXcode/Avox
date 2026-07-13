@@ -1,0 +1,12 @@
+[package]
+name = "avox-core"
+description = "Geteilte Domänenlogik und Typen für Avox (Konfiguration, Scan-Ergebnisse, Aktionen)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Bewusst std-only im Skelett. serde/serde_json kommen in M2 (IPC-Serialisierung) hinzu.

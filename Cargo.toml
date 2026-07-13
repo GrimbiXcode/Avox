@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/avox-core",
+    "crates/avox-ipc",
+    "crates/avox-engine",
+    "crates/avox-service",
+]
+
+# Der GUI-Frontend (Tauri) folgt in Meilenstein M3 unter `app/` und ist bewusst
+# noch nicht Teil des Cargo-Workspaces, damit `cargo build` ohne Node/Tauri grün bleibt.
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "GPL-2.0-only"
+authors = ["Avox Contributors"]
+repository = "https://github.com/avox/avox"
+rust-version = "1.75"
+
+[workspace.dependencies]
+avox-core = { path = "crates/avox-core" }
+avox-ipc = { path = "crates/avox-ipc" }
+avox-engine = { path = "crates/avox-engine" }
+
+[profile.release]
+strip = true
+lto = "thin"

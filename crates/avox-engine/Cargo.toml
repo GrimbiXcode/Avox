@@ -1,0 +1,13 @@
+[package]
+name = "avox-engine"
+description = "Anbindung an den ClamAV-Daemon (clamd) über IPC — Scannen ohne libclamav zu linken."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+avox-core.workspace = true
+# std-only: Wir sprechen das clamd-Protokoll direkt über TCP/Unix-Sockets.

@@ -1,0 +1,18 @@
+# Beispiel-systemd-Unit für den Avox-Dienst (Skelett-Stand).
+# Installation: /etc/systemd/system/avox-service.service
+[Unit]
+Description=Avox Antivirus Service
+After=network.target clamav-daemon.service
+Wants=clamav-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/avox-service
+Restart=on-failure
+# Härtung (in M2 ausbauen: minimale Rechte, IPC-Socket etc.)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

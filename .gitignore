@@ -1,0 +1,23 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Tauri / Node (app/, ab M3)
+node_modules/
+dist/
+.vite/
+app/src-tauri/target/
+
+# Signaturen / lokale Laufzeitdaten (nie committen)
+*.cvd
+*.cld
+/quarantine/
+*.log
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
