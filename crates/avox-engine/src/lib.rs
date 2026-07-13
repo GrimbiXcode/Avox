@@ -55,7 +55,10 @@ impl ClamdClient {
         stream.flush()?;
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf)?;
-        Ok(String::from_utf8_lossy(&buf).into_owned())
+        // 'z'-Antworten sind NUL-terminiert; das abschließende NUL entfernen.
+        // Interne NUL-Trenner (mehrzeilige Scan-Antwort) bleiben erhalten.
+        let s = String::from_utf8_lossy(&buf).into_owned();
+        Ok(s.trim_end_matches('\0').to_string())
     }
 
     /// Öffnet die Verbindung passend zum Adresstyp.
