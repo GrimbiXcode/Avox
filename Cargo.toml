@@ -6,9 +6,10 @@ members = [
     "crates/avox-engine",
     "crates/avox-service",
 ]
-
-# Der GUI-Frontend (Tauri) folgt in Meilenstein M3 unter `app/` und ist bewusst
-# noch nicht Teil des Cargo-Workspaces, damit `cargo build` ohne Node/Tauri grün bleibt.
+# Die Tauri-GUI unter `app/` ist ein eigenständiges Crate (eigene Cargo.lock) und
+# bewusst NICHT Teil dieses Workspaces, damit `cargo build --workspace` und die
+# Kern-CI ohne Tauri/WebView-Systemabhängigkeiten grün bleiben.
+exclude = ["app"]
 
 [workspace.package]
 version = "0.0.1"

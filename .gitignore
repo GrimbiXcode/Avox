@@ -8,6 +8,7 @@ node_modules/
 dist/
 .vite/
 app/src-tauri/target/
+app/src-tauri/gen/
 
 # Signaturen / lokale Laufzeitdaten (nie committen)
 *.cvd

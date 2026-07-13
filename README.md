@@ -25,7 +25,7 @@ Details: [`PLAN.md`](./PLAN.md).
 | `avox-ipc` | Nachrichten-Vertrag **und** Transport (Unix-Socket/TCP, JSON-Framing) |
 | `avox-engine` | clamd-IPC-Client (Ping, Version, Scan) |
 | `avox-service` | Privilegierter Dienst: IPC-Server, Quarantäne, freshclam |
-| `app/` | Tauri-GUI — folgt in M3 |
+| `app/` | **Tauri-v2-GUI** (Dashboard, Scan, Quarantäne) — [Details](./app/README.md) |
 
 ## Schnellstart (Entwicklung)
 

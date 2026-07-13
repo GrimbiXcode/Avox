@@ -1,0 +1,25 @@
+[package]
+name = "avox-app"
+version = "0.0.1"
+edition = "2021"
+description = "Avox — grafische Oberfläche (Tauri v2)"
+license = "GPL-2.0-only"
+repository = "https://github.com/GrimbiXcode/Avox"
+rust-version = "1.77"
+
+[lib]
+name = "avox_app_lib"
+# staticlib/cdylib werden für die mobile/Systemeinbindung von Tauri benötigt.
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Avox-Kern: gemeinsame Typen + IPC-Transport zum privilegierten avox-service.
+avox-core = { path = "../../crates/avox-core" }
+avox-ipc = { path = "../../crates/avox-ipc" }
