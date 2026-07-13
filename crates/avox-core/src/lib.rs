@@ -5,8 +5,10 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 /// Ergebnis eines Scans für einen einzelnen Pfad.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScanStatus {
     /// Keine Bedrohung gefunden.
     Clean,
@@ -17,7 +19,7 @@ pub enum ScanStatus {
 }
 
 /// Ein einzelner Fund innerhalb eines Scans.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Finding {
     /// Betroffene Datei.
     pub path: PathBuf,
@@ -26,7 +28,7 @@ pub struct Finding {
 }
 
 /// Aggregiertes Ergebnis eines Scan-Laufs über einen oder mehrere Pfade.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScanReport {
     /// Anzahl geprüfter Dateien.
     pub scanned: u64,
@@ -44,7 +46,7 @@ impl ScanReport {
 }
 
 /// Aktion, die auf einen Fund angewendet werden soll.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ThreatAction {
     /// In die Quarantäne verschieben — sicherer Default (umkehrbar, löscht nichts).
     #[default]
@@ -56,7 +58,7 @@ pub enum ThreatAction {
 }
 
 /// Adresse des `clamd`-Daemons, mit dem der Service spricht.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClamdAddress {
     /// Unix-Domain-Socket (Linux/macOS), z. B. `/var/run/clamav/clamd.ctl`.
     Unix(PathBuf),

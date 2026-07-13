@@ -22,6 +22,8 @@ rust-version = "1.75"
 avox-core = { path = "crates/avox-core" }
 avox-ipc = { path = "crates/avox-ipc" }
 avox-engine = { path = "crates/avox-engine" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [profile.release]
 strip = true

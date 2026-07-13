@@ -9,4 +9,4 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-# Bewusst std-only im Skelett. serde/serde_json kommen in M2 (IPC-Serialisierung) hinzu.
+serde.workspace = true

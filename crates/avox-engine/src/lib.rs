@@ -41,10 +41,17 @@ impl ClamdClient {
     }
 
     /// Scannt einen Pfad (Datei oder Ordner, rekursiv via `CONTSCAN`).
+    ///
+    /// clamd meldet bei `CONTSCAN` nur befallene Dateien und Fehler zurück — für
+    /// saubere Dateien kommt nichts. Die Gesamtzahl geprüfter Dateien ermitteln wir
+    /// daher selbst per Dateisystem-Walk (Konvention wie `clamdscan`). Dieser Wert
+    /// kann von clamds interner Zählung abweichen (z. B. Dateien in Archiven).
     pub fn scan_path(&self, path: &Path) -> io::Result<ScanReport> {
         let path_str = path.to_string_lossy();
         let raw = self.command(&format!("CONTSCAN {path_str}"))?;
-        Ok(parse_scan_response(&raw))
+        let mut report = parse_scan_response(&raw);
+        report.scanned = count_files(path);
+        Ok(report)
     }
 
     /// Sendet ein clamd-Kommando im `z`-Format und liest die vollständige Antwort.
@@ -91,7 +98,41 @@ impl ClamdClient {
 trait ReadWrite: Read + Write {}
 impl<T: Read + Write> ReadWrite for T {}
 
+/// Zählt reguläre Dateien unter `path` (rekursiv). Symlinks werden nicht verfolgt,
+/// um Zyklen zu vermeiden. Eine einzelne Datei zählt als 1, unlesbare Pfade als 0.
+fn count_files(path: &Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if meta.is_file() {
+        return 1;
+    }
+    if !meta.is_dir() {
+        return 0;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    let mut count = 0;
+    for entry in entries.flatten() {
+        let child = entry.path();
+        let Ok(m) = std::fs::symlink_metadata(&child) else {
+            continue;
+        };
+        if m.file_type().is_symlink() {
+            continue; // Symlinks nicht folgen
+        } else if m.is_dir() {
+            count += count_files(&child);
+        } else if m.is_file() {
+            count += 1;
+        }
+    }
+    count
+}
+
 /// Parst die (mehrzeilige, `\0`- oder `\n`-getrennte) clamd-Scan-Antwort.
+/// Setzt nur `findings` und `errors`; die Gesamtzahl (`scanned`) wird separat
+/// über [`count_files`] bestimmt, da clamd saubere Dateien nicht meldet.
 fn parse_scan_response(raw: &str) -> ScanReport {
     let mut report = ScanReport::default();
     for line in raw.split(['\0', '\n']) {
@@ -99,7 +140,6 @@ fn parse_scan_response(raw: &str) -> ScanReport {
         if line.is_empty() {
             continue;
         }
-        report.scanned += 1;
         if let Some(rest) = line.strip_suffix(" FOUND") {
             // Format: "<pfad>: <signatur> FOUND"
             if let Some((path, sig)) = rest.rsplit_once(": ") {
@@ -128,18 +168,34 @@ mod tests {
     fn parses_found_line() {
         let raw = "/tmp/eicar.txt: Eicar-Test-Signature FOUND\0";
         let r = parse_scan_response(raw);
-        assert_eq!(r.scanned, 1);
         assert_eq!(r.findings.len(), 1);
         assert_eq!(r.findings[0].signature, "Eicar-Test-Signature");
     }
 
     #[test]
-    fn parses_clean_and_error_lines() {
+    fn parses_error_line_and_ignores_ok() {
+        // clamd meldet keine OK-Zeilen; falls doch vorhanden, dürfen sie nichts auslösen.
         let raw = "/tmp/a: OK\n/tmp/b: Can't open file ERROR\n";
         let r = parse_scan_response(raw);
-        assert_eq!(r.scanned, 2);
         assert!(!r.is_infected());
         assert_eq!(r.errors.len(), 1);
+        assert!(r.findings.is_empty());
+    }
+
+    #[test]
+    fn count_files_counts_regular_files_recursively() {
+        let base = std::env::temp_dir().join(format!("avox-count-{}", std::process::id()));
+        let sub = base.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(base.join("a.txt"), b"a").unwrap();
+        std::fs::write(base.join("b.txt"), b"b").unwrap();
+        std::fs::write(sub.join("c.txt"), b"c").unwrap();
+
+        assert_eq!(count_files(&base), 3);
+        assert_eq!(count_files(&base.join("a.txt")), 1);
+        assert_eq!(count_files(&base.join("does-not-exist")), 0);
+
+        std::fs::remove_dir_all(&base).ok();
     }
 
     /// Integrationstest gegen einen laufenden clamd. Standardmäßig ignoriert.

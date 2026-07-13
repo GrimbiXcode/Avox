@@ -22,9 +22,9 @@ Details: [`PLAN.md`](./PLAN.md).
 | Crate | Zweck |
 |---|---|
 | `avox-core` | Geteilte Domänentypen (Scan-Ergebnis, Aktionen, Konfiguration) |
-| `avox-ipc` | Nachrichten-Vertrag zwischen Service und GUI |
+| `avox-ipc` | Nachrichten-Vertrag **und** Transport (Unix-Socket/TCP, JSON-Framing) |
 | `avox-engine` | clamd-IPC-Client (Ping, Version, Scan) |
-| `avox-service` | Privilegierter Hintergrunddienst (Skelett-CLI) |
+| `avox-service` | Privilegierter Dienst: IPC-Server, Quarantäne, freshclam |
 | `app/` | Tauri-GUI — folgt in M3 |
 
 ## Schnellstart (Entwicklung)
@@ -36,7 +36,7 @@ Voraussetzung: Rust (stable) und ein laufender `clamd`.
 cargo build --workspace
 cargo test  --workspace
 
-# Gegen einen laufenden clamd (TCP 127.0.0.1:3310 als Default)
+# Direkt gegen clamd (Diagnose, TCP 127.0.0.1:3310 als Default)
 cargo run -p avox-service -- ping
 cargo run -p avox-service -- version
 cargo run -p avox-service -- scan ./pfad/zum/ordner
@@ -45,11 +45,34 @@ cargo run -p avox-service -- scan ./pfad/zum/ordner
 AVOX_CLAMD_ADDR=/var/run/clamav/clamd.ctl cargo run -p avox-service -- ping
 ```
 
+### IPC-Server & -Client (M2)
+
+Der Service kann als Daemon lauschen; ein Client (später die GUI) spricht ihn über
+einen Unix-Socket (bzw. loopback-TCP) an:
+
+```bash
+# Terminal 1: Server starten (Default-Socket /tmp/avox-service.sock)
+cargo run -p avox-service -- serve
+
+# Terminal 2: Anfragen als Client
+cargo run -p avox-service -- call ping
+cargo run -p avox-service -- call version
+cargo run -p avox-service -- call scan ./pfad/zum/ordner
+cargo run -p avox-service -- call quarantine ./verdaechtige-datei
+cargo run -p avox-service -- call update            # freshclam
+
+# Endpoint & Pfade überschreiben
+AVOX_IPC=127.0.0.1:7777 cargo run -p avox-service -- serve
+AVOX_QUARANTINE_DIR=~/.avox/quarantine  AVOX_FRESHCLAM_CONF=/pfad/freshclam.conf ...
+```
+
 Integrationstest gegen laufenden clamd:
 
 ```bash
 cargo test -p avox-engine -- --ignored
 ```
+
+Lokales clamd-Setup: siehe [`docs/dev-setup.md`](./docs/dev-setup.md).
 
 ## Mitmachen
 
