@@ -72,6 +72,22 @@ pub fn dispatch(cfg: &Config, request: Request) -> Response {
         Request::UpdateSignatures => update_signatures(cfg),
 
         Request::ApplyAction { path, action } => apply_action(cfg, &path, action),
+
+        Request::ListQuarantine => {
+            match Quarantine::new(&cfg.quarantine_dir).and_then(|q| q.list()) {
+                Ok(list) => Response::QuarantineList(list),
+                Err(e) => Response::Error(format!("Quarantäne-Liste fehlgeschlagen: {e}")),
+            }
+        }
+
+        Request::RestoreQuarantine { id } => {
+            match Quarantine::new(&cfg.quarantine_dir).and_then(|q| q.restore(&id)) {
+                Ok(entry) => Response::ActionApplied {
+                    detail: format!("wiederhergestellt: {}", entry.original_path.display()),
+                },
+                Err(e) => Response::Error(format!("Wiederherstellung fehlgeschlagen: {e}")),
+            }
+        }
     }
 }
 

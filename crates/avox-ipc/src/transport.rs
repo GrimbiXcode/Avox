@@ -52,7 +52,10 @@ impl Endpoint {
 /// Lauschender Socket für den Service.
 pub enum Listener {
     #[cfg(unix)]
-    Unix(std::os::unix::net::UnixListener),
+    Unix {
+        listener: std::os::unix::net::UnixListener,
+        path: PathBuf,
+    },
     Tcp(TcpListener),
 }
 
@@ -67,7 +70,13 @@ impl Listener {
                     let _ = std::fs::remove_file(path);
                 }
                 let listener = std::os::unix::net::UnixListener::bind(path)?;
-                Ok(Listener::Unix(listener))
+                // Härtung: nur der Eigentümer darf sich verbinden (rw-------).
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+                Ok(Listener::Unix {
+                    listener,
+                    path: path.clone(),
+                })
             }
             #[cfg(not(unix))]
             Endpoint::Unix(_) => Err(io::Error::new(
@@ -82,8 +91,32 @@ impl Listener {
     pub fn accept(&self) -> io::Result<Box<dyn Stream>> {
         match self {
             #[cfg(unix)]
-            Listener::Unix(l) => Ok(Box::new(l.accept()?.0)),
+            Listener::Unix { listener, .. } => Ok(Box::new(listener.accept()?.0)),
             Listener::Tcp(l) => Ok(Box::new(l.accept()?.0)),
+        }
+    }
+
+    /// Tatsächlich gebundener Endpoint (bei TCP z. B. mit dem realen Port,
+    /// wenn mit `:0` ein ephemerer Port angefordert wurde).
+    pub fn local_addr(&self) -> io::Result<Endpoint> {
+        match self {
+            #[cfg(unix)]
+            Listener::Unix { path, .. } => Ok(Endpoint::Unix(path.clone())),
+            Listener::Tcp(l) => Ok(Endpoint::Tcp(l.local_addr()?.to_string())),
+        }
+    }
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        // Räumt die Unix-Socket-Datei bei **geordnetem** Beenden auf (normaler Return,
+        // Panic-Unwind). Achtung: bei Signal-Terminierung (SIGTERM/SIGKILL) läuft Drop
+        // nicht — ein sauberer Socket-Cleanup dort erfordert einen Signal-Handler
+        // (spätere Stufe). Unkritisch, da `bind()` einen vorhandenen Socket beim
+        // Start ohnehin entfernt.
+        #[cfg(unix)]
+        if let Listener::Unix { path, .. } = self {
+            let _ = std::fs::remove_file(path);
         }
     }
 }
@@ -156,5 +189,54 @@ mod tests {
         assert_eq!(a, Some(vec![1, 2, 3]));
         assert_eq!(b, Some("hallo".to_string()));
         assert_eq!(c, None); // EOF
+    }
+
+    /// Voller Request/Response-Umlauf über einen **echten** Socket (loopback-TCP mit
+    /// ephemerem Port, damit der Test auch unter Windows-CI läuft). Deckt bind →
+    /// local_addr → accept → connect → Framing in beide Richtungen ab.
+    #[test]
+    fn request_response_over_real_socket() {
+        use crate::{Request, RequestEnvelope, Response, ResponseEnvelope};
+        use std::io::BufReader;
+        use std::thread;
+
+        let listener = Listener::bind(&Endpoint::Tcp("127.0.0.1:0".into())).unwrap();
+        let endpoint = listener.local_addr().unwrap();
+
+        // Server: eine Verbindung annehmen, eine Anfrage beantworten.
+        let server = thread::spawn(move || {
+            let conn = listener.accept().unwrap();
+            let mut reader = BufReader::new(conn);
+            let env: RequestEnvelope = read_msg(&mut reader).unwrap().unwrap();
+            let response = match env.request {
+                Request::Ping => Response::Pong,
+                _ => Response::Error("unerwartet".into()),
+            };
+            write_msg(
+                reader.get_mut(),
+                &ResponseEnvelope {
+                    id: env.id,
+                    response,
+                },
+            )
+            .unwrap();
+        });
+
+        // Client: verbinden, Ping senden, Pong erwarten.
+        let conn = connect(&endpoint).unwrap();
+        let mut reader = BufReader::new(conn);
+        write_msg(
+            reader.get_mut(),
+            &RequestEnvelope {
+                id: 7,
+                request: Request::Ping,
+            },
+        )
+        .unwrap();
+        let resp: ResponseEnvelope = read_msg(&mut reader).unwrap().unwrap();
+
+        assert_eq!(resp.id, 7);
+        assert_eq!(resp.response, Response::Pong);
+        server.join().unwrap();
     }
 }

@@ -72,6 +72,17 @@ impl Default for ClamdAddress {
     }
 }
 
+/// Ein Eintrag im Quarantäne-Index: eine verschobene Datei und ihr Ursprung.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuarantineEntry {
+    /// Eindeutige ID (zugleich Dateiname innerhalb der Quarantäne).
+    pub id: String,
+    /// Ursprünglicher Pfad der Datei (Ziel bei Wiederherstellung).
+    pub original_path: PathBuf,
+    /// Zeitpunkt der Quarantäne (Unix-Sekunden).
+    pub quarantined_at: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

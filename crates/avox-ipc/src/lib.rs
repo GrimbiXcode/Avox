@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use avox_core::{ScanReport, ThreatAction};
+use avox_core::{QuarantineEntry, ScanReport, ThreatAction};
 use serde::{Deserialize, Serialize};
 
 pub mod transport;
@@ -26,6 +26,10 @@ pub enum Request {
     Scan { path: PathBuf },
     /// Eine Aktion auf einen konkreten Fund anwenden.
     ApplyAction { path: PathBuf, action: ThreatAction },
+    /// Inhalt der Quarantäne auflisten.
+    ListQuarantine,
+    /// Eine Datei aus der Quarantäne an ihren Ursprungsort zurückstellen.
+    RestoreQuarantine { id: String },
     /// Signatur-Update (freshclam) anstoßen.
     UpdateSignatures,
 }
@@ -41,6 +45,8 @@ pub enum Response {
     ScanResult(ScanReport),
     /// Aktion wurde ausgeführt (mit kurzer Beschreibung, z. B. Quarantäne-Pfad).
     ActionApplied { detail: String },
+    /// Inhalt der Quarantäne.
+    QuarantineList(Vec<QuarantineEntry>),
     /// Update-Ergebnis (z. B. „daily.cvd aktualisiert").
     SignaturesUpdated { summary: String },
     /// Fehler mit menschenlesbarem Text.

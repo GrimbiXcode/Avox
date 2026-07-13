@@ -52,6 +52,8 @@ fn usage() {
     eprintln!("  call ping|version|update       Anfrage an laufenden Server");
     eprintln!("  call scan <PFAD>");
     eprintln!("  call quarantine|delete <PFAD>");
+    eprintln!("  call list                      Quarantäne auflisten");
+    eprintln!("  call restore <ID>              Datei aus Quarantäne zurückstellen");
     eprintln!("  ping|version|scan <PFAD>       Direkt an clamd (Diagnose)");
     eprintln!("\nUmgebung: AVOX_CLAMD_ADDR, AVOX_IPC, AVOX_QUARANTINE_DIR, AVOX_FRESHCLAM[_CONF]");
 }
@@ -75,6 +77,14 @@ fn cmd_call(endpoint: &Endpoint, args: &[String]) -> ExitCode {
         Some("ping") => Request::Ping,
         Some("version") => Request::GetVersion,
         Some("update") => Request::UpdateSignatures,
+        Some("list") => Request::ListQuarantine,
+        Some("restore") => match args.get(1) {
+            Some(id) => Request::RestoreQuarantine { id: id.clone() },
+            None => {
+                eprintln!("Verwendung: call restore <ID>");
+                return ExitCode::FAILURE;
+            }
+        },
         Some("scan") => match args.get(1) {
             Some(p) => Request::Scan {
                 path: PathBuf::from(p),
@@ -141,6 +151,17 @@ fn print_response(response: &Response) -> ExitCode {
         }
         Response::ActionApplied { detail } => {
             println!("OK: {detail}");
+            ExitCode::SUCCESS
+        }
+        Response::QuarantineList(entries) => {
+            if entries.is_empty() {
+                println!("Quarantäne ist leer");
+            } else {
+                println!("Quarantäne ({} Einträge):", entries.len());
+                for e in entries {
+                    println!("  {}  ← {}", e.id, e.original_path.display());
+                }
+            }
             ExitCode::SUCCESS
         }
         Response::SignaturesUpdated { summary } => {

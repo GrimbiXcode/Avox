@@ -59,6 +59,8 @@ cargo run -p avox-service -- call ping
 cargo run -p avox-service -- call version
 cargo run -p avox-service -- call scan ./pfad/zum/ordner
 cargo run -p avox-service -- call quarantine ./verdaechtige-datei
+cargo run -p avox-service -- call list              # Quarantäne auflisten
+cargo run -p avox-service -- call restore <ID>      # Datei zurückstellen
 cargo run -p avox-service -- call update            # freshclam
 
 # Endpoint & Pfade überschreiben
