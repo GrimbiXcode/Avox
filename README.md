@@ -98,6 +98,19 @@ cargo test -p avox-engine -- --ignored
 
 Lokales clamd-Setup: siehe [`docs/dev-setup.md`](./docs/dev-setup.md).
 
+## Installer / Pakete
+
+Die Installer (`.dmg`, `.deb`/`.rpm`/`.AppImage`, `.msi`) baut Tauri aus `app/`:
+
+```bash
+cd app && npm ci && npx tauri build     # Bundles für die aktuelle Plattform
+```
+
+CI baut die Bundles plattformübergreifend ([`app.yml`](./.github/workflows/app.yml));
+ein Tag `vX.Y.Z` erzeugt einen Release-Entwurf mit Installern
+([`release.yml`](./.github/workflows/release.yml)). Details & Signierung:
+[`packaging/README.md`](./packaging/README.md).
+
 ## Mitmachen
 
 Siehe [`CONTRIBUTING.md`](./CONTRIBUTING.md) und [`SECURITY.md`](./SECURITY.md).

@@ -25,12 +25,24 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "Utility",
+    "copyright": "© 2026 Avox Contributors — GPL-2.0-only",
+    "shortDescription": "Open-Source-Antivirus auf ClamAV-Basis",
+    "longDescription": "Avox ist ein benutzerfreundlicher, quelloffener Antivirus auf Basis von ClamAV mit grafischer Oberfläche. Die GUI spricht einen privilegierten Dienst über IPC an (Scan, Quarantäne, Zeitpläne, Signatur-Updates).",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "linux": {
+      "deb": {
+        "depends": ["clamav-daemon", "clamav-freshclam"]
+      }
+    }
   }
 }
