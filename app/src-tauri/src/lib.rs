@@ -7,6 +7,9 @@
 //! Alle Commands sind **async** und führen die blockierende Socket-IO über
 //! `spawn_blocking` aus. Dadurch bleibt der UI-Thread frei — selbst wenn der
 //! Dienst hängt oder ein Scan lange dauert, friert das Fenster nicht ein.
+//!
+//! Beim Start richtet die App den Autostart des Dienstes (und, wo nötig, der
+//! ClamAV-Engine) plattformabhängig ein — siehe [`autostart`].
 
 use std::io::BufReader;
 use std::path::PathBuf;
@@ -17,6 +20,8 @@ use avox_ipc::transport::{self, Endpoint};
 use avox_ipc::{Request, RequestEnvelope, Response, ResponseEnvelope};
 use serde::Serialize;
 use tauri::Manager;
+
+mod autostart;
 
 /// Versionsinfo für das Frontend.
 #[derive(Serialize)]
@@ -35,7 +40,7 @@ fn endpoint() -> Endpoint {
 /// Blockierender IPC-Aufruf (läuft nur innerhalb von `spawn_blocking`).
 fn call_blocking(request: Request) -> Result<Response, String> {
     let conn = transport::connect(&endpoint())
-        .map_err(|e| format!("Avox-Dienst nicht erreichbar ({e}). Läuft `avox-service serve`?"))?;
+        .map_err(|e| format!("Avox-Dienst nicht erreichbar ({e}). Läuft der Dienst?"))?;
     let mut reader = BufReader::new(conn);
     transport::write_msg(reader.get_mut(), &RequestEnvelope { id: 1, request })
         .map_err(|e| format!("Senden fehlgeschlagen: {e}"))?;
@@ -154,9 +159,7 @@ async fn update_signatures() -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            ensure_service_running(app.handle());
-            #[cfg(target_os = "macos")]
-            ensure_clamav_agents();
+            ensure_services(app.handle());
             build_tray(app.handle())?;
             Ok(())
         })
@@ -176,34 +179,19 @@ pub fn run() {
         .expect("Fehler beim Starten der Avox-Anwendung");
 }
 
-/// Stellt sicher, dass der Avox-Dienst läuft. Auf **macOS** richtet die App dafür
-/// selbst einen **launchd-LaunchAgent** ein (Autostart beim Login, unabhängig davon,
-/// ob die GUI läuft); sonst wird die mitgelieferte Binary direkt gestartet.
-/// Voraussetzung bleibt ein laufender `clamd`.
-fn ensure_service_running(app: &tauri::AppHandle) {
-    #[cfg(target_os = "macos")]
-    {
-        match ensure_launchagent(app) {
-            Ok(()) => return,
-            Err(e) => {
-                eprintln!("Autostart konnte nicht eingerichtet werden ({e}) — starte Dienst direkt")
-            }
-        }
+/// Stellt beim Start sicher, dass der Avox-Dienst (und, wo nötig, die ClamAV-Engine)
+/// läuft — plattformabhängig via [`autostart`]. Scheitert die Autostart-Einrichtung,
+/// wird die mitgelieferte Dienst-Binary direkt gestartet (Fallback).
+fn ensure_services(app: &tauri::AppHandle) {
+    let bundled = bundled_service_path(app);
+    if !autostart::ensure_avox_service(bundled.as_deref()) {
+        spawn_bundled_service(app);
     }
-    spawn_bundled_service(app);
+    autostart::ensure_engine();
 }
 
-/// Wartet kurz, bis der Dienst auf dem Socket lauscht.
-fn wait_for_service() {
-    for _ in 0..30 {
-        if transport::connect(&endpoint()).is_ok() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-/// Startet die mitgelieferte Dienst-Binary direkt (Fallback / Nicht-macOS).
+/// Startet die mitgelieferte Dienst-Binary direkt (Fallback, wenn kein Autostart
+/// eingerichtet werden konnte).
 fn spawn_bundled_service(app: &tauri::AppHandle) {
     if transport::connect(&endpoint()).is_ok() {
         return;
@@ -215,287 +203,18 @@ fn spawn_bundled_service(app: &tauri::AppHandle) {
     match std::process::Command::new(&bin).arg("serve").spawn() {
         Ok(_) => {
             eprintln!("avox-service gestartet: {}", bin.display());
-            wait_for_service();
+            for _ in 0..30 {
+                if transport::connect(&endpoint()).is_ok() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
         }
         Err(e) => eprintln!(
             "Start von avox-service fehlgeschlagen ({}): {e}",
             bin.display()
         ),
     }
-}
-
-/// Richtet den launchd-LaunchAgent ein (kopiert die Binary an einen stabilen Ort,
-/// schreibt die Plist, lädt sie idempotent). macOS-spezifisch.
-#[cfg(target_os = "macos")]
-fn ensure_launchagent(app: &tauri::AppHandle) -> std::io::Result<()> {
-    use std::io;
-    let home = std::env::var("HOME")
-        .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "HOME nicht gesetzt"))?;
-    let home = PathBuf::from(home);
-
-    // 1) Dienst-Binary an einen stabilen Ort kopieren (der Bundle-Pfad ändert sich
-    //    bei App-Updates/-Verschieben; launchd braucht einen festen Pfad).
-    let support = home.join("Library/Application Support/Avox");
-    std::fs::create_dir_all(&support)?;
-    let stable_bin = support.join("avox-service");
-    let mut changed = false;
-    match bundled_service_path(app) {
-        Some(src) => changed |= copy_if_different(&src, &stable_bin)?,
-        None if !stable_bin.exists() => {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "avox-service nicht gefunden",
-            ));
-        }
-        None => {}
-    }
-
-    // 2) LaunchAgent-Plist schreiben.
-    let agents = home.join("Library/LaunchAgents");
-    std::fs::create_dir_all(&agents)?;
-    let plist_path = agents.join("org.avox.service.plist");
-    changed |= write_if_different(&plist_path, launchagent_plist(&stable_bin).as_bytes())?;
-
-    // 3) Laden / bei Änderung neu laden (idempotent).
-    let plist_str = plist_path.to_string_lossy().to_string();
-    let loaded = launchctl_is_loaded("org.avox.service");
-    if changed || !loaded {
-        if loaded {
-            let _ = std::process::Command::new("launchctl")
-                .args(["unload", &plist_str])
-                .output();
-        }
-        let _ = std::process::Command::new("launchctl")
-            .args(["load", "-w", &plist_str])
-            .output();
-        wait_for_service();
-    }
-    Ok(())
-}
-
-/// `true`, wenn der LaunchAgent mit diesem Label aktuell geladen ist.
-#[cfg(target_os = "macos")]
-fn launchctl_is_loaded(label: &str) -> bool {
-    std::process::Command::new("launchctl")
-        .args(["list", label])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-/// Startverhalten eines LaunchAgents.
-#[cfg(target_os = "macos")]
-enum AgentSchedule {
-    /// Dauerhaft laufen lassen (RunAtLoad + KeepAlive) — z. B. clamd.
-    KeepAlive,
-    /// Beim Login und dann alle N Sekunden ausführen — z. B. freshclam.
-    Interval(u32),
-}
-
-/// Richtet fehlende launchd-Agents für **clamd** und **freshclam** ein — aber nur,
-/// wenn ClamAV installiert und konfiguriert ist. Fehlt es, gibt es einen Hinweis
-/// (der App-Start bleibt unberührt; siehe README zur ClamAV-Installation).
-#[cfg(target_os = "macos")]
-fn ensure_clamav_agents() {
-    // clamd — dauerhaft (KeepAlive), im Vordergrund für launchd.
-    if !launchctl_is_loaded("org.clamav.clamd") {
-        let bin = find_executable(
-            "clamd",
-            &[
-                "/opt/homebrew/sbin",
-                "/usr/local/sbin",
-                "/usr/sbin",
-                "/usr/bin",
-            ],
-        );
-        match (bin, find_clamav_config("clamd.conf")) {
-            (Some(bin), Some(conf)) => install_launchagent(
-                "org.clamav.clamd",
-                &[
-                    bin.to_string_lossy().into_owned(),
-                    "--foreground".into(),
-                    format!("--config-file={}", conf.display()),
-                ],
-                AgentSchedule::KeepAlive,
-                "/tmp/clamd.log",
-            ),
-            _ => eprintln!(
-                "clamd oder clamd.conf nicht gefunden — ClamAV installieren/konfigurieren (siehe README)"
-            ),
-        }
-    }
-
-    // freshclam — periodische Signatur-Updates (alle 6 h).
-    if !launchctl_is_loaded("org.clamav.freshclam") {
-        let bin = find_executable(
-            "freshclam",
-            &["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
-        );
-        match (bin, find_clamav_config("freshclam.conf")) {
-            (Some(bin), Some(conf)) => install_launchagent(
-                "org.clamav.freshclam",
-                &[
-                    bin.to_string_lossy().into_owned(),
-                    format!("--config-file={}", conf.display()),
-                ],
-                AgentSchedule::Interval(21600),
-                "/tmp/freshclam.log",
-            ),
-            _ => eprintln!(
-                "freshclam oder freshclam.conf nicht gefunden — ClamAV installieren/konfigurieren (siehe README)"
-            ),
-        }
-    }
-}
-
-/// Schreibt eine LaunchAgent-Plist und lädt sie (nur wenn nicht bereits geladen).
-#[cfg(target_os = "macos")]
-fn install_launchagent(label: &str, args: &[String], schedule: AgentSchedule, log: &str) {
-    let Ok(home) = std::env::var("HOME") else {
-        return;
-    };
-    let agents = PathBuf::from(home).join("Library/LaunchAgents");
-    if std::fs::create_dir_all(&agents).is_err() {
-        return;
-    }
-    let plist_path = agents.join(format!("{label}.plist"));
-    if std::fs::write(&plist_path, render_plist(label, args, &schedule, log)).is_err() {
-        eprintln!("Konnte LaunchAgent-Plist nicht schreiben: {label}");
-        return;
-    }
-    let _ = std::process::Command::new("launchctl")
-        .args(["load", "-w", &plist_path.to_string_lossy()])
-        .output();
-    eprintln!("LaunchAgent eingerichtet: {label}");
-}
-
-/// Erzeugt den Plist-Inhalt.
-#[cfg(target_os = "macos")]
-fn render_plist(label: &str, args: &[String], schedule: &AgentSchedule, log: &str) -> String {
-    let args_xml: String = args
-        .iter()
-        .map(|a| format!("    <string>{}</string>\n", xml_escape(a)))
-        .collect();
-    let schedule_xml = match schedule {
-        AgentSchedule::KeepAlive => {
-            "  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>".to_string()
-        }
-        AgentSchedule::Interval(secs) => format!(
-            "  <key>RunAtLoad</key><true/>\n  <key>StartInterval</key><integer>{secs}</integer>"
-        ),
-    };
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>{label}</string>
-  <key>ProgramArguments</key><array>
-{args_xml}  </array>
-{schedule_xml}
-  <key>StandardOutPath</key><string>{log}</string>
-  <key>StandardErrorPath</key><string>{log}</string>
-</dict></plist>
-"#
-    )
-}
-
-/// Minimales XML-Escaping für Plist-Strings (Pfade).
-#[cfg(target_os = "macos")]
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-/// Sucht eine ausführbare Datei in festen Verzeichnissen, sonst über `which`.
-#[cfg(target_os = "macos")]
-fn find_executable(name: &str, dirs: &[&str]) -> Option<PathBuf> {
-    for dir in dirs {
-        let p = std::path::Path::new(dir).join(name);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    let out = std::process::Command::new("which")
-        .arg(name)
-        .output()
-        .ok()?;
-    if out.status.success() {
-        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if !s.is_empty() {
-            return Some(PathBuf::from(s));
-        }
-    }
-    None
-}
-
-/// Sucht eine vorhandene ClamAV-Konfigurationsdatei in den üblichen Verzeichnissen.
-#[cfg(target_os = "macos")]
-fn find_clamav_config(filename: &str) -> Option<PathBuf> {
-    for dir in [
-        "/opt/homebrew/etc/clamav",
-        "/usr/local/etc/clamav",
-        "/etc/clamav",
-        "/opt/homebrew/etc",
-        "/usr/local/etc",
-    ] {
-        let p = std::path::Path::new(dir).join(filename);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
-}
-
-/// Inhalt der LaunchAgent-Plist für den gegebenen Binary-Pfad.
-#[cfg(target_os = "macos")]
-fn launchagent_plist(bin: &std::path::Path) -> String {
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>org.avox.service</string>
-  <key>ProgramArguments</key><array>
-    <string>{}</string><string>serve</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/tmp/avox-service.log</string>
-  <key>StandardErrorPath</key><string>/tmp/avox-service.log</string>
-</dict></plist>
-"#,
-        bin.display()
-    )
-}
-
-/// Kopiert `src` nach `dest`, wenn sich der Inhalt unterscheidet; setzt Ausführrecht.
-/// Gibt `true` zurück, wenn kopiert wurde.
-#[cfg(target_os = "macos")]
-fn copy_if_different(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<bool> {
-    let need = match (std::fs::read(src), std::fs::read(dest)) {
-        (Ok(a), Ok(b)) => a != b,
-        (Ok(_), Err(_)) => true,
-        (Err(e), _) => return Err(e),
-    };
-    if need {
-        std::fs::copy(src, dest)?;
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))?;
-    }
-    Ok(need)
-}
-
-/// Schreibt `contents` nach `path`, wenn abweichend. Gibt `true` bei Änderung zurück.
-#[cfg(target_os = "macos")]
-fn write_if_different(path: &std::path::Path, contents: &[u8]) -> std::io::Result<bool> {
-    let need = match std::fs::read(path) {
-        Ok(existing) => existing != contents,
-        Err(_) => true,
-    };
-    if need {
-        std::fs::write(path, contents)?;
-    }
-    Ok(need)
 }
 
 /// Sucht die mitgelieferte `avox-service`-Binary (Bundle-Ressource; Dev-Fallback

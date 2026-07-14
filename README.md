@@ -61,6 +61,22 @@ ausführen und `clamd` als Dienst starten.
 Ausführliche, reproduzierbare Schritt-für-Schritt-Anleitung (macOS): siehe
 [`docs/dev-setup.md`](./docs/dev-setup.md).
 
+## Autostart / Hintergrunddienst
+
+Die GUI richtet den Autostart **selbst** ein — plattformübliches Pendant je OS:
+
+| Plattform | Mechanismus | avox-service | clamd / freshclam |
+|---|---|---|---|
+| **macOS** | launchd (`~/Library/LaunchAgents`) | von der App | von der App (Homebrew hat keinen Dienst) |
+| **Linux** | systemd-User-Unit (`~/.config/systemd/user`) | von der App | **Distributions-Dienst** (`clamav-daemon`, `clamav-freshclam`) |
+| **Windows** | geplante Aufgabe (`schtasks`, ONLOGON) | von der App | **ClamAV-Installer-Dienst** |
+
+Der Avox-Dienst wird also überall automatisch beim Login gestartet. **clamd** verwaltet
+die App nur dort selbst, wo die ClamAV-Distribution keinen eigenen Dienst mitbringt
+(macOS/Homebrew); auf Linux/Windows übernehmen das die ClamAV-Pakete. Läuft `clamd`
+nicht, zeigt die App einen Hinweis. Schlägt die Autostart-Einrichtung fehl, startet die
+App den Dienst als Fallback direkt.
+
 ## Schnellstart (Entwicklung)
 
 Voraussetzung: Rust (stable) und ein laufender `clamd`.
