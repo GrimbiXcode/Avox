@@ -1,6 +1,6 @@
 {
   "name": "avox-app",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Avox — GUI (Tauri v2)",
   "private": true,
   "license": "GPL-2.0-only",

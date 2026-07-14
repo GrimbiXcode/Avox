@@ -4,21 +4,21 @@ version = 3
 
 [[package]]
 name = "avox-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "avox-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "avox-core",
 ]
 
 [[package]]
 name = "avox-ipc"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "avox-core",
  "serde",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "avox-service"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "avox-core",
  "avox-engine",
