@@ -2,8 +2,11 @@
 //!
 //! Die GUI ist **unprivilegiert** und spricht den privilegierten `avox-service`
 //! ausschließlich über die IPC (`avox-ipc`) an — dieselbe Schnittstelle wie der
-//! `call`-Client des Service. Jeder Tauri-Command öffnet eine kurzlebige
-//! Verbindung, sendet eine Anfrage und liefert das Ergebnis an das Frontend.
+//! `call`-Client des Service.
+//!
+//! Alle Commands sind **async** und führen die blockierende Socket-IO über
+//! `spawn_blocking` aus. Dadurch bleibt der UI-Thread frei — selbst wenn der
+//! Dienst hängt oder ein Scan lange dauert, friert das Fenster nicht ein.
 
 use std::io::BufReader;
 
@@ -27,8 +30,8 @@ fn endpoint() -> Endpoint {
         .unwrap_or_else(|_| Endpoint::default_local())
 }
 
-/// Sendet eine Anfrage an den Dienst und wartet auf die Antwort.
-fn call(request: Request) -> Result<Response, String> {
+/// Blockierender IPC-Aufruf (läuft nur innerhalb von `spawn_blocking`).
+fn call_blocking(request: Request) -> Result<Response, String> {
     let conn = transport::connect(&endpoint())
         .map_err(|e| format!("Avox-Dienst nicht erreichbar ({e}). Läuft `avox-service serve`?"))?;
     let mut reader = BufReader::new(conn);
@@ -42,6 +45,15 @@ fn call(request: Request) -> Result<Response, String> {
     }
 }
 
+/// Führt den blockierenden Aufruf auf einem Blocking-Thread aus, ohne den
+/// UI-/Runtime-Thread zu blockieren.
+async fn call(request: Request) -> Result<Response, String> {
+    match tauri::async_runtime::spawn_blocking(move || call_blocking(request)).await {
+        Ok(result) => result,
+        Err(e) => Err(format!("interner Fehler beim IPC-Aufruf: {e}")),
+    }
+}
+
 /// Wandelt eine unerwartete Antwort in einen Fehlertext.
 fn unexpected(r: &Response) -> String {
     match r {
@@ -51,84 +63,86 @@ fn unexpected(r: &Response) -> String {
 }
 
 #[tauri::command]
-fn service_ping() -> Result<bool, String> {
-    match call(Request::Ping)? {
+async fn service_ping() -> Result<bool, String> {
+    match call(Request::Ping).await? {
         Response::Pong => Ok(true),
         other => Err(unexpected(&other)),
     }
 }
 
 #[tauri::command]
-fn get_version() -> Result<VersionInfo, String> {
-    match call(Request::GetVersion)? {
+async fn get_version() -> Result<VersionInfo, String> {
+    match call(Request::GetVersion).await? {
         Response::Version { service, clamd } => Ok(VersionInfo { service, clamd }),
         other => Err(unexpected(&other)),
     }
 }
 
 #[tauri::command]
-fn scan(path: String) -> Result<ScanReport, String> {
-    match call(Request::Scan { path: path.into() })? {
+async fn scan(path: String) -> Result<ScanReport, String> {
+    match call(Request::Scan { path: path.into() }).await? {
         Response::ScanResult(report) => Ok(report),
         other => Err(unexpected(&other)),
     }
 }
 
 #[tauri::command]
-fn full_scan() -> Result<ScanReport, String> {
-    match call(Request::FullScan)? {
+async fn full_scan() -> Result<ScanReport, String> {
+    match call(Request::FullScan).await? {
         Response::ScanResult(report) => Ok(report),
         other => Err(unexpected(&other)),
     }
 }
 
 #[tauri::command]
-fn get_schedule() -> Result<Vec<ScheduleInfo>, String> {
-    match call(Request::GetSchedule)? {
+async fn get_schedule() -> Result<Vec<ScheduleInfo>, String> {
+    match call(Request::GetSchedule).await? {
         Response::Schedule(items) => Ok(items),
         other => Err(unexpected(&other)),
     }
 }
 
 #[tauri::command]
-fn quarantine_file(path: String) -> Result<String, String> {
-    apply(path, ThreatAction::Quarantine)
+async fn quarantine_file(path: String) -> Result<String, String> {
+    apply(path, ThreatAction::Quarantine).await
 }
 
 #[tauri::command]
-fn delete_file(path: String) -> Result<String, String> {
-    apply(path, ThreatAction::Delete)
+async fn delete_file(path: String) -> Result<String, String> {
+    apply(path, ThreatAction::Delete).await
 }
 
-fn apply(path: String, action: ThreatAction) -> Result<String, String> {
+async fn apply(path: String, action: ThreatAction) -> Result<String, String> {
     match call(Request::ApplyAction {
         path: path.into(),
         action,
-    })? {
+    })
+    .await?
+    {
         Response::ActionApplied { detail } => Ok(detail),
         other => Err(unexpected(&other)),
     }
 }
 
 #[tauri::command]
-fn list_quarantine() -> Result<Vec<QuarantineEntry>, String> {
-    match call(Request::ListQuarantine)? {
+async fn list_quarantine() -> Result<Vec<QuarantineEntry>, String> {
+    match call(Request::ListQuarantine).await? {
         Response::QuarantineList(entries) => Ok(entries),
         other => Err(unexpected(&other)),
     }
 }
 
 #[tauri::command]
-fn restore(id: String) -> Result<String, String> {
-    match call(Request::RestoreQuarantine { id })? {
+async fn restore(id: String) -> Result<String, String> {
+    match call(Request::RestoreQuarantine { id }).await? {
         Response::ActionApplied { detail } => Ok(detail),
         other => Err(unexpected(&other)),
     }
 }
 
 #[tauri::command]
-fn update_signatures() -> Result<String, String> {
-    match call(Request::UpdateSignatures)? {
+async fn update_signatures() -> Result<String, String> {
+    match call(Request::UpdateSignatures).await? {
         Response::SignaturesUpdated { summary } => Ok(summary),
         other => Err(unexpected(&other)),
     }

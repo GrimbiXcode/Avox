@@ -5,11 +5,19 @@
 //! loopback-TCP-Port. [`read_msg`]/[`write_msg`] übernehmen das line-delimited-JSON-Framing.
 
 use std::io::{self, BufRead, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+
+/// Timeout für den Verbindungsaufbau eines Clients (schnelles Erkennen eines
+/// nicht laufenden Dienstes).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Timeout fürs Senden einer Anfrage. Das **Lesen** bleibt bewusst unbegrenzt,
+/// damit lange Scans (deren Antwort erst nach Abschluss kommt) nicht abbrechen.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Alles, worüber wir lesen und schreiben können; `Send`, damit Verbindungen in
 /// Worker-Threads übergeben werden können.
@@ -121,17 +129,33 @@ impl Drop for Listener {
     }
 }
 
-/// Verbindet sich als Client mit einem Endpoint.
+/// Verbindet sich als Client mit einem Endpoint. Setzt Connect-/Write-Timeouts;
+/// der Lese-Timeout bleibt offen (lange Scans).
 pub fn connect(endpoint: &Endpoint) -> io::Result<Box<dyn Stream>> {
     match endpoint {
         #[cfg(unix)]
-        Endpoint::Unix(path) => Ok(Box::new(std::os::unix::net::UnixStream::connect(path)?)),
+        Endpoint::Unix(path) => {
+            // Unix-Domain-Connect ist lokal praktisch sofort (oder scheitert sofort).
+            let stream = std::os::unix::net::UnixStream::connect(path)?;
+            stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
+            Ok(Box::new(stream))
+        }
         #[cfg(not(unix))]
         Endpoint::Unix(_) => Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "Unix-Sockets werden auf dieser Plattform nicht unterstützt; TCP verwenden",
         )),
-        Endpoint::Tcp(addr) => Ok(Box::new(TcpStream::connect(addr)?)),
+        Endpoint::Tcp(addr) => {
+            let sockaddr = addr.to_socket_addrs()?.next().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("ungültige Adresse: {addr}"),
+                )
+            })?;
+            let stream = TcpStream::connect_timeout(&sockaddr, CONNECT_TIMEOUT)?;
+            stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
+            Ok(Box::new(stream))
+        }
     }
 }
 

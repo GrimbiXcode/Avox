@@ -111,6 +111,25 @@ ein Tag `vX.Y.Z` erzeugt einen Release-Entwurf mit Installern
 ([`release.yml`](./.github/workflows/release.yml)). Details & Signierung:
 [`packaging/README.md`](./packaging/README.md).
 
+### Nach dem Download öffnen (wichtig!)
+
+Die Bundles sind derzeit **nicht signiert/notarisiert**. Beim ersten Start blockiert
+macOS (Gatekeeper) heruntergeladene, nicht-notarisierte Apps — die App scheint dann
+„hängen zu bleiben" oder lässt sich nicht öffnen.
+
+**macOS** – einmalig eine der beiden Varianten:
+```bash
+# Quarantäne-Markierung entfernen …
+xattr -dr com.apple.quarantine /Applications/Avox.app
+```
+… oder im Finder **Rechtsklick auf Avox.app → „Öffnen"** und den Dialog bestätigen.
+
+**Windows:** Beim SmartScreen-Dialog „Weitere Informationen" → „Trotzdem ausführen".
+
+> Diese Reibung verschwindet, sobald das Projekt Developer-ID-Signatur +
+> Notarisierung (macOS) bzw. EV-Signing (Windows) hat — siehe
+> [`packaging/README.md`](./packaging/README.md).
+
 ## Mitmachen
 
 Siehe [`CONTRIBUTING.md`](./CONTRIBUTING.md) und [`SECURITY.md`](./SECURITY.md).
