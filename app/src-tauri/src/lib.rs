@@ -174,11 +174,35 @@ pub fn run() {
         .expect("Fehler beim Starten der Avox-Anwendung");
 }
 
-/// Stellt sicher, dass der Avox-Dienst läuft: ist er nicht erreichbar, wird die
-/// **mitgelieferte** `avox-service`-Binary gestartet. So muss der Nutzer den Dienst
-/// nicht manuell starten. (Voraussetzung bleibt ein laufender `clamd`.)
+/// Stellt sicher, dass der Avox-Dienst läuft. Auf **macOS** richtet die App dafür
+/// selbst einen **launchd-LaunchAgent** ein (Autostart beim Login, unabhängig davon,
+/// ob die GUI läuft); sonst wird die mitgelieferte Binary direkt gestartet.
+/// Voraussetzung bleibt ein laufender `clamd`.
 fn ensure_service_running(app: &tauri::AppHandle) {
-    // Schon erreichbar? Dann nichts tun.
+    #[cfg(target_os = "macos")]
+    {
+        match ensure_launchagent(app) {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("Autostart konnte nicht eingerichtet werden ({e}) — starte Dienst direkt")
+            }
+        }
+    }
+    spawn_bundled_service(app);
+}
+
+/// Wartet kurz, bis der Dienst auf dem Socket lauscht.
+fn wait_for_service() {
+    for _ in 0..30 {
+        if transport::connect(&endpoint()).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Startet die mitgelieferte Dienst-Binary direkt (Fallback / Nicht-macOS).
+fn spawn_bundled_service(app: &tauri::AppHandle) {
     if transport::connect(&endpoint()).is_ok() {
         return;
     }
@@ -189,20 +213,123 @@ fn ensure_service_running(app: &tauri::AppHandle) {
     match std::process::Command::new(&bin).arg("serve").spawn() {
         Ok(_) => {
             eprintln!("avox-service gestartet: {}", bin.display());
-            // Kurz warten, bis der Dienst lauscht, damit die GUI beim ersten
-            // Laden bereits verbinden kann.
-            for _ in 0..30 {
-                if transport::connect(&endpoint()).is_ok() {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
+            wait_for_service();
         }
         Err(e) => eprintln!(
             "Start von avox-service fehlgeschlagen ({}): {e}",
             bin.display()
         ),
     }
+}
+
+/// Richtet den launchd-LaunchAgent ein (kopiert die Binary an einen stabilen Ort,
+/// schreibt die Plist, lädt sie idempotent). macOS-spezifisch.
+#[cfg(target_os = "macos")]
+fn ensure_launchagent(app: &tauri::AppHandle) -> std::io::Result<()> {
+    use std::io;
+    let home = std::env::var("HOME")
+        .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "HOME nicht gesetzt"))?;
+    let home = PathBuf::from(home);
+
+    // 1) Dienst-Binary an einen stabilen Ort kopieren (der Bundle-Pfad ändert sich
+    //    bei App-Updates/-Verschieben; launchd braucht einen festen Pfad).
+    let support = home.join("Library/Application Support/Avox");
+    std::fs::create_dir_all(&support)?;
+    let stable_bin = support.join("avox-service");
+    let mut changed = false;
+    match bundled_service_path(app) {
+        Some(src) => changed |= copy_if_different(&src, &stable_bin)?,
+        None if !stable_bin.exists() => {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "avox-service nicht gefunden",
+            ));
+        }
+        None => {}
+    }
+
+    // 2) LaunchAgent-Plist schreiben.
+    let agents = home.join("Library/LaunchAgents");
+    std::fs::create_dir_all(&agents)?;
+    let plist_path = agents.join("org.avox.service.plist");
+    changed |= write_if_different(&plist_path, launchagent_plist(&stable_bin).as_bytes())?;
+
+    // 3) Laden / bei Änderung neu laden (idempotent).
+    let plist_str = plist_path.to_string_lossy().to_string();
+    let loaded = launchctl_loaded();
+    if changed || !loaded {
+        if loaded {
+            let _ = std::process::Command::new("launchctl")
+                .args(["unload", &plist_str])
+                .output();
+        }
+        let _ = std::process::Command::new("launchctl")
+            .args(["load", "-w", &plist_str])
+            .output();
+        wait_for_service();
+    }
+    Ok(())
+}
+
+/// `true`, wenn der LaunchAgent aktuell geladen ist.
+#[cfg(target_os = "macos")]
+fn launchctl_loaded() -> bool {
+    std::process::Command::new("launchctl")
+        .args(["list", "org.avox.service"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Inhalt der LaunchAgent-Plist für den gegebenen Binary-Pfad.
+#[cfg(target_os = "macos")]
+fn launchagent_plist(bin: &std::path::Path) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>org.avox.service</string>
+  <key>ProgramArguments</key><array>
+    <string>{}</string><string>serve</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/avox-service.log</string>
+  <key>StandardErrorPath</key><string>/tmp/avox-service.log</string>
+</dict></plist>
+"#,
+        bin.display()
+    )
+}
+
+/// Kopiert `src` nach `dest`, wenn sich der Inhalt unterscheidet; setzt Ausführrecht.
+/// Gibt `true` zurück, wenn kopiert wurde.
+#[cfg(target_os = "macos")]
+fn copy_if_different(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<bool> {
+    let need = match (std::fs::read(src), std::fs::read(dest)) {
+        (Ok(a), Ok(b)) => a != b,
+        (Ok(_), Err(_)) => true,
+        (Err(e), _) => return Err(e),
+    };
+    if need {
+        std::fs::copy(src, dest)?;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(need)
+}
+
+/// Schreibt `contents` nach `path`, wenn abweichend. Gibt `true` bei Änderung zurück.
+#[cfg(target_os = "macos")]
+fn write_if_different(path: &std::path::Path, contents: &[u8]) -> std::io::Result<bool> {
+    let need = match std::fs::read(path) {
+        Ok(existing) => existing != contents,
+        Err(_) => true,
+    };
+    if need {
+        std::fs::write(path, contents)?;
+    }
+    Ok(need)
 }
 
 /// Sucht die mitgelieferte `avox-service`-Binary (Bundle-Ressource; Dev-Fallback
