@@ -155,6 +155,8 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             ensure_service_running(app.handle());
+            #[cfg(target_os = "macos")]
+            ensure_clamav_agents();
             build_tray(app.handle())?;
             Ok(())
         })
@@ -256,7 +258,7 @@ fn ensure_launchagent(app: &tauri::AppHandle) -> std::io::Result<()> {
 
     // 3) Laden / bei Änderung neu laden (idempotent).
     let plist_str = plist_path.to_string_lossy().to_string();
-    let loaded = launchctl_loaded();
+    let loaded = launchctl_is_loaded("org.avox.service");
     if changed || !loaded {
         if loaded {
             let _ = std::process::Command::new("launchctl")
@@ -271,14 +273,178 @@ fn ensure_launchagent(app: &tauri::AppHandle) -> std::io::Result<()> {
     Ok(())
 }
 
-/// `true`, wenn der LaunchAgent aktuell geladen ist.
+/// `true`, wenn der LaunchAgent mit diesem Label aktuell geladen ist.
 #[cfg(target_os = "macos")]
-fn launchctl_loaded() -> bool {
+fn launchctl_is_loaded(label: &str) -> bool {
     std::process::Command::new("launchctl")
-        .args(["list", "org.avox.service"])
+        .args(["list", label])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Startverhalten eines LaunchAgents.
+#[cfg(target_os = "macos")]
+enum AgentSchedule {
+    /// Dauerhaft laufen lassen (RunAtLoad + KeepAlive) — z. B. clamd.
+    KeepAlive,
+    /// Beim Login und dann alle N Sekunden ausführen — z. B. freshclam.
+    Interval(u32),
+}
+
+/// Richtet fehlende launchd-Agents für **clamd** und **freshclam** ein — aber nur,
+/// wenn ClamAV installiert und konfiguriert ist. Fehlt es, gibt es einen Hinweis
+/// (der App-Start bleibt unberührt; siehe README zur ClamAV-Installation).
+#[cfg(target_os = "macos")]
+fn ensure_clamav_agents() {
+    // clamd — dauerhaft (KeepAlive), im Vordergrund für launchd.
+    if !launchctl_is_loaded("org.clamav.clamd") {
+        let bin = find_executable(
+            "clamd",
+            &[
+                "/opt/homebrew/sbin",
+                "/usr/local/sbin",
+                "/usr/sbin",
+                "/usr/bin",
+            ],
+        );
+        match (bin, find_clamav_config("clamd.conf")) {
+            (Some(bin), Some(conf)) => install_launchagent(
+                "org.clamav.clamd",
+                &[
+                    bin.to_string_lossy().into_owned(),
+                    "--foreground".into(),
+                    format!("--config-file={}", conf.display()),
+                ],
+                AgentSchedule::KeepAlive,
+                "/tmp/clamd.log",
+            ),
+            _ => eprintln!(
+                "clamd oder clamd.conf nicht gefunden — ClamAV installieren/konfigurieren (siehe README)"
+            ),
+        }
+    }
+
+    // freshclam — periodische Signatur-Updates (alle 6 h).
+    if !launchctl_is_loaded("org.clamav.freshclam") {
+        let bin = find_executable(
+            "freshclam",
+            &["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
+        );
+        match (bin, find_clamav_config("freshclam.conf")) {
+            (Some(bin), Some(conf)) => install_launchagent(
+                "org.clamav.freshclam",
+                &[
+                    bin.to_string_lossy().into_owned(),
+                    format!("--config-file={}", conf.display()),
+                ],
+                AgentSchedule::Interval(21600),
+                "/tmp/freshclam.log",
+            ),
+            _ => eprintln!(
+                "freshclam oder freshclam.conf nicht gefunden — ClamAV installieren/konfigurieren (siehe README)"
+            ),
+        }
+    }
+}
+
+/// Schreibt eine LaunchAgent-Plist und lädt sie (nur wenn nicht bereits geladen).
+#[cfg(target_os = "macos")]
+fn install_launchagent(label: &str, args: &[String], schedule: AgentSchedule, log: &str) {
+    let Ok(home) = std::env::var("HOME") else {
+        return;
+    };
+    let agents = PathBuf::from(home).join("Library/LaunchAgents");
+    if std::fs::create_dir_all(&agents).is_err() {
+        return;
+    }
+    let plist_path = agents.join(format!("{label}.plist"));
+    if std::fs::write(&plist_path, render_plist(label, args, &schedule, log)).is_err() {
+        eprintln!("Konnte LaunchAgent-Plist nicht schreiben: {label}");
+        return;
+    }
+    let _ = std::process::Command::new("launchctl")
+        .args(["load", "-w", &plist_path.to_string_lossy()])
+        .output();
+    eprintln!("LaunchAgent eingerichtet: {label}");
+}
+
+/// Erzeugt den Plist-Inhalt.
+#[cfg(target_os = "macos")]
+fn render_plist(label: &str, args: &[String], schedule: &AgentSchedule, log: &str) -> String {
+    let args_xml: String = args
+        .iter()
+        .map(|a| format!("    <string>{}</string>\n", xml_escape(a)))
+        .collect();
+    let schedule_xml = match schedule {
+        AgentSchedule::KeepAlive => {
+            "  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>".to_string()
+        }
+        AgentSchedule::Interval(secs) => format!(
+            "  <key>RunAtLoad</key><true/>\n  <key>StartInterval</key><integer>{secs}</integer>"
+        ),
+    };
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>{label}</string>
+  <key>ProgramArguments</key><array>
+{args_xml}  </array>
+{schedule_xml}
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict></plist>
+"#
+    )
+}
+
+/// Minimales XML-Escaping für Plist-Strings (Pfade).
+#[cfg(target_os = "macos")]
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Sucht eine ausführbare Datei in festen Verzeichnissen, sonst über `which`.
+#[cfg(target_os = "macos")]
+fn find_executable(name: &str, dirs: &[&str]) -> Option<PathBuf> {
+    for dir in dirs {
+        let p = std::path::Path::new(dir).join(name);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    let out = std::process::Command::new("which")
+        .arg(name)
+        .output()
+        .ok()?;
+    if out.status.success() {
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !s.is_empty() {
+            return Some(PathBuf::from(s));
+        }
+    }
+    None
+}
+
+/// Sucht eine vorhandene ClamAV-Konfigurationsdatei in den üblichen Verzeichnissen.
+#[cfg(target_os = "macos")]
+fn find_clamav_config(filename: &str) -> Option<PathBuf> {
+    for dir in [
+        "/opt/homebrew/etc/clamav",
+        "/usr/local/etc/clamav",
+        "/etc/clamav",
+        "/opt/homebrew/etc",
+        "/usr/local/etc",
+    ] {
+        let p = std::path::Path::new(dir).join(filename);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
 }
 
 /// Inhalt der LaunchAgent-Plist für den gegebenen Binary-Pfad.
