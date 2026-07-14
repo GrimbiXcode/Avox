@@ -11,6 +11,8 @@
 
 mod config;
 mod quarantine;
+mod scan;
+mod scheduler;
 mod server;
 
 use std::io::{self, BufReader};
@@ -51,6 +53,8 @@ fn usage() {
     eprintln!("  serve                          IPC-Server starten");
     eprintln!("  call ping|version|update       Anfrage an laufenden Server");
     eprintln!("  call scan <PFAD>");
+    eprintln!("  call full-scan                 Vollscan der konfigurierten Pfade");
+    eprintln!("  call schedule                  Zeitpläne anzeigen");
     eprintln!("  call quarantine|delete <PFAD>");
     eprintln!("  call list                      Quarantäne auflisten");
     eprintln!("  call restore <ID>              Datei aus Quarantäne zurückstellen");
@@ -77,6 +81,8 @@ fn cmd_call(endpoint: &Endpoint, args: &[String]) -> ExitCode {
         Some("ping") => Request::Ping,
         Some("version") => Request::GetVersion,
         Some("update") => Request::UpdateSignatures,
+        Some("full-scan") => Request::FullScan,
+        Some("schedule") => Request::GetSchedule,
         Some("list") => Request::ListQuarantine,
         Some("restore") => match args.get(1) {
             Some(id) => Request::RestoreQuarantine { id: id.clone() },
@@ -160,6 +166,17 @@ fn print_response(response: &Response) -> ExitCode {
                 println!("Quarantäne ({} Einträge):", entries.len());
                 for e in entries {
                     println!("  {}  ← {}", e.id, e.original_path.display());
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Response::Schedule(items) => {
+            if items.is_empty() {
+                println!("Keine Zeitpläne konfiguriert");
+            } else {
+                println!("Zeitpläne ({}):", items.len());
+                for s in items {
+                    println!("  • {} (alle {} s)", s.description, s.every_secs);
                 }
             }
             ExitCode::SUCCESS

@@ -43,6 +43,14 @@ impl ScanReport {
     pub fn is_infected(&self) -> bool {
         !self.findings.is_empty()
     }
+
+    /// Fügt ein weiteres Teil-Ergebnis hinzu (z. B. beim Aggregieren mehrerer
+    /// Pfade eines Vollscans).
+    pub fn merge(&mut self, other: ScanReport) {
+        self.scanned += other.scanned;
+        self.findings.extend(other.findings);
+        self.errors.extend(other.errors);
+    }
 }
 
 /// Aktion, die auf einen Fund angewendet werden soll.
@@ -70,6 +78,17 @@ impl Default for ClamdAddress {
     fn default() -> Self {
         ClamdAddress::Tcp("127.0.0.1:3310".to_string())
     }
+}
+
+/// Für die GUI aufbereitete Beschreibung eines geplanten Scans.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleInfo {
+    /// Menschlesbare Beschreibung, z. B. „Vollscan alle 24 h".
+    pub description: String,
+    /// Intervall in Sekunden.
+    pub every_secs: u64,
+    /// `true`, wenn es ein Vollscan ist (sonst gezielter Pfad-Scan).
+    pub full: bool,
 }
 
 /// Ein Eintrag im Quarantäne-Index: eine verschobene Datei und ihr Ursprung.

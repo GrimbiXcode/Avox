@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use avox_core::{QuarantineEntry, ScanReport, ThreatAction};
+use avox_core::{QuarantineEntry, ScanReport, ScheduleInfo, ThreatAction};
 use serde::{Deserialize, Serialize};
 
 pub mod transport;
@@ -24,6 +24,10 @@ pub enum Request {
     GetVersion,
     /// Einen Pfad (Datei oder Ordner) scannen.
     Scan { path: PathBuf },
+    /// Vollständiger Scan der konfigurierten Pfade (Default: Home-Verzeichnis).
+    FullScan,
+    /// Die konfigurierten Zeitpläne abfragen (für die Anzeige in der GUI).
+    GetSchedule,
     /// Eine Aktion auf einen konkreten Fund anwenden.
     ApplyAction { path: PathBuf, action: ThreatAction },
     /// Inhalt der Quarantäne auflisten.
@@ -47,6 +51,8 @@ pub enum Response {
     ActionApplied { detail: String },
     /// Inhalt der Quarantäne.
     QuarantineList(Vec<QuarantineEntry>),
+    /// Konfigurierte Zeitpläne.
+    Schedule(Vec<ScheduleInfo>),
     /// Update-Ergebnis (z. B. „daily.cvd aktualisiert").
     SignaturesUpdated { summary: String },
     /// Fehler mit menschenlesbarem Text.

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Avox-Dienst als launchd-LaunchAgent (startet beim Login des Nutzers).
+  Installation:
+    cp platform/macos/org.avox.service.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/org.avox.service.plist
+  Deinstallation:
+    launchctl unload ~/Library/LaunchAgents/org.avox.service.plist
+
+  Hinweis: Pfad zum Binary anpassen. Für echten Systemschutz (Rechte/Boot) gehört
+  der Dienst später als LaunchDaemon nach /Library/LaunchDaemons (root).
+-->
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>org.avox.service</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/local/bin/avox-service</string>
+      <string>serve</string>
+    </array>
+
+    <!-- Beim Login starten und am Leben halten -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Optional: IPC-Endpoint / Config über die Umgebung setzen -->
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>AVOX_CLAMD_ADDR</key>
+      <string>127.0.0.1:3310</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/avox-service.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/avox-service.log</string>
+  </dict>
+</plist>

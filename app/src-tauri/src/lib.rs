@@ -7,10 +7,11 @@
 
 use std::io::BufReader;
 
-use avox_core::{QuarantineEntry, ScanReport, ThreatAction};
+use avox_core::{QuarantineEntry, ScanReport, ScheduleInfo, ThreatAction};
 use avox_ipc::transport::{self, Endpoint};
 use avox_ipc::{Request, RequestEnvelope, Response, ResponseEnvelope};
 use serde::Serialize;
+use tauri::Manager;
 
 /// Versionsinfo für das Frontend.
 #[derive(Serialize)]
@@ -28,9 +29,8 @@ fn endpoint() -> Endpoint {
 
 /// Sendet eine Anfrage an den Dienst und wartet auf die Antwort.
 fn call(request: Request) -> Result<Response, String> {
-    let conn = transport::connect(&endpoint()).map_err(|e| {
-        format!("Avox-Dienst nicht erreichbar ({e}). Läuft `avox-service serve`?")
-    })?;
+    let conn = transport::connect(&endpoint())
+        .map_err(|e| format!("Avox-Dienst nicht erreichbar ({e}). Läuft `avox-service serve`?"))?;
     let mut reader = BufReader::new(conn);
     transport::write_msg(reader.get_mut(), &RequestEnvelope { id: 1, request })
         .map_err(|e| format!("Senden fehlgeschlagen: {e}"))?;
@@ -70,6 +70,22 @@ fn get_version() -> Result<VersionInfo, String> {
 fn scan(path: String) -> Result<ScanReport, String> {
     match call(Request::Scan { path: path.into() })? {
         Response::ScanResult(report) => Ok(report),
+        other => Err(unexpected(&other)),
+    }
+}
+
+#[tauri::command]
+fn full_scan() -> Result<ScanReport, String> {
+    match call(Request::FullScan)? {
+        Response::ScanResult(report) => Ok(report),
+        other => Err(unexpected(&other)),
+    }
+}
+
+#[tauri::command]
+fn get_schedule() -> Result<Vec<ScheduleInfo>, String> {
+    match call(Request::GetSchedule)? {
+        Response::Schedule(items) => Ok(items),
         other => Err(unexpected(&other)),
     }
 }
@@ -118,13 +134,19 @@ fn update_signatures() -> Result<String, String> {
     }
 }
 
-/// Startet die Tauri-Anwendung.
+/// Startet die Tauri-Anwendung inkl. System-Tray.
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            build_tray(app.handle())?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             service_ping,
             get_version,
             scan,
+            full_scan,
+            get_schedule,
             quarantine_file,
             delete_file,
             list_quarantine,
@@ -133,4 +155,36 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("Fehler beim Starten der Avox-Anwendung");
+}
+
+/// Baut das System-Tray-Icon mit Kontextmenü (Öffnen / Beenden).
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::TrayIconBuilder;
+
+    let open = MenuItem::with_id(app, "open", "Avox öffnen", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Beenden", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
+
+    let mut builder = TrayIconBuilder::new()
+        .tooltip("Avox Antivirus")
+        .menu(&menu)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open" => show_main(app),
+            "quit" => app.exit(0),
+            _ => {}
+        });
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon);
+    }
+    builder.build(app)?;
+    Ok(())
+}
+
+/// Zeigt das Hauptfenster und holt es in den Vordergrund.
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
 }

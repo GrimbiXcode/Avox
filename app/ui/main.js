@@ -64,7 +64,7 @@ async function doScan() {
   box.innerHTML = "<h3>Scan läuft…</h3>";
   try {
     const r = await invoke("scan", { path });
-    renderScan(r, path);
+    renderScan(r);
     log(`Scan: ${path} — geprüft ${r.scanned}, Funde ${r.findings.length}`,
         r.findings.length ? "err" : "ok");
     if (r.findings.length) refreshQuarantine();
@@ -79,7 +79,33 @@ async function doScan() {
   }
 }
 
-function renderScan(r, path) {
+async function doFullScan() {
+  const btn = $("btn-fullscan");
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = "Scannt…";
+  const box = $("scan-result");
+  box.hidden = false;
+  box.className = "result spin";
+  box.innerHTML = "<h3>Vollständiger Scan läuft…</h3>";
+  try {
+    const r = await invoke("full_scan");
+    renderScan(r);
+    log(`Vollscan — geprüft ${r.scanned}, Funde ${r.findings.length}`,
+        r.findings.length ? "err" : "ok");
+    if (r.findings.length) refreshQuarantine();
+  } catch (e) {
+    box.className = "result infected";
+    box.innerHTML = "<h3>Vollscan fehlgeschlagen</h3>";
+    box.append(document.createTextNode(String(e)));
+    log(String(e), "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+function renderScan(r) {
   const box = $("scan-result");
   const infected = r.findings.length > 0;
   box.className = "result " + (infected ? "infected" : "clean");
@@ -169,6 +195,44 @@ async function restoreOne(id, btn) {
   }
 }
 
+// --- Geplante Scans ---
+function humanizeSecs(s) {
+  if (s % 86400 === 0) return s / 86400 + " Tag(e)";
+  if (s % 3600 === 0) return s / 3600 + " h";
+  if (s % 60 === 0) return s / 60 + " min";
+  return s + " s";
+}
+
+async function refreshSchedule() {
+  const box = $("schedule-list");
+  try {
+    const items = await invoke("get_schedule");
+    if (!items.length) {
+      box.innerHTML = '<p class="muted">Keine Zeitpläne konfiguriert.</p>';
+      return;
+    }
+    box.innerHTML = "";
+    for (const s of items) {
+      const row = document.createElement("div");
+      row.className = "qrow";
+      const left = document.createElement("div");
+      const p = document.createElement("div");
+      p.className = "qpath";
+      p.textContent = s.description;
+      const meta = document.createElement("div");
+      meta.className = "qmeta";
+      meta.textContent = (s.full ? "Vollscan · " : "") + "Intervall " + humanizeSecs(s.every_secs);
+      left.append(p, meta);
+      row.append(left);
+      box.appendChild(row);
+    }
+  } catch (e) {
+    box.innerHTML = '<p class="muted"></p>';
+    box.firstChild.textContent = String(e);
+    log(String(e), "err");
+  }
+}
+
 // --- Signaturen aktualisieren ---
 async function updateSignatures() {
   const btn = $("btn-update");
@@ -194,10 +258,13 @@ window.addEventListener("DOMContentLoaded", () => {
   $("scan-path").addEventListener("keydown", (e) => {
     if (e.key === "Enter") doScan();
   });
+  $("btn-fullscan").addEventListener("click", doFullScan);
   $("btn-update").addEventListener("click", updateSignatures);
   $("btn-refresh-q").addEventListener("click", refreshQuarantine);
+  $("btn-refresh-s").addEventListener("click", refreshSchedule);
 
   log("Avox gestartet.");
   refreshStatus();
   refreshQuarantine();
+  refreshSchedule();
 });

@@ -14,10 +14,13 @@ use avox_ipc::{Request, RequestEnvelope, Response, ResponseEnvelope};
 
 use crate::config::Config;
 use crate::quarantine::{self, Quarantine};
+use crate::scan::{self, ScanTarget};
+use crate::scheduler;
 
 /// Startet den Server und lauscht dauerhaft auf dem konfigurierten Endpoint.
 pub fn run(config: Config) -> std::io::Result<()> {
     let listener = Listener::bind(&config.ipc)?;
+    scheduler::start(config.clone());
     eprintln!("avox-service lauscht auf {:?}", config.ipc);
     loop {
         match listener.accept() {
@@ -56,6 +59,8 @@ fn request_label(request: &Request) -> String {
         Request::Ping => "Ping".to_string(),
         Request::GetVersion => "GetVersion".to_string(),
         Request::Scan { path } => format!("Scan {}", path.display()),
+        Request::FullScan => "FullScan".to_string(),
+        Request::GetSchedule => "GetSchedule".to_string(),
         Request::ApplyAction { path, action } => {
             format!("ApplyAction {action:?} {}", path.display())
         }
@@ -84,6 +89,13 @@ pub fn dispatch(cfg: &Config, request: Request) -> Response {
             Ok(report) => Response::ScanResult(report),
             Err(e) => Response::Error(format!("Scan fehlgeschlagen: {e}")),
         },
+
+        Request::FullScan => match scan::run(cfg, &ScanTarget::Full) {
+            Ok(report) => Response::ScanResult(report),
+            Err(e) => Response::Error(format!("Vollscan fehlgeschlagen: {e}")),
+        },
+
+        Request::GetSchedule => Response::Schedule(cfg.schedule_infos()),
 
         Request::UpdateSignatures => update_signatures(cfg),
 

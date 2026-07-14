@@ -59,6 +59,8 @@ cargo run -p avox-service -- call ping
 cargo run -p avox-service -- call version
 cargo run -p avox-service -- call scan ./pfad/zum/ordner
 cargo run -p avox-service -- call quarantine ./verdaechtige-datei
+cargo run -p avox-service -- call full-scan         # Vollscan der konfigurierten Pfade
+cargo run -p avox-service -- call schedule          # Zeitpläne anzeigen
 cargo run -p avox-service -- call list              # Quarantäne auflisten
 cargo run -p avox-service -- call restore <ID>      # Datei zurückstellen
 cargo run -p avox-service -- call update            # freshclam
@@ -67,6 +69,26 @@ cargo run -p avox-service -- call update            # freshclam
 AVOX_IPC=127.0.0.1:7777 cargo run -p avox-service -- serve
 AVOX_QUARANTINE_DIR=~/.avox/quarantine  AVOX_FRESHCLAM_CONF=/pfad/freshclam.conf ...
 ```
+
+### Zeitpläne & Vollscan (Config-Datei)
+
+Zeitgesteuerte Scans und Vollscan-Pfade kommen aus einer JSON-Config
+(`AVOX_CONFIG`, Default `~/.config/avox/config.json`). Der Dienst startet pro
+Zeitplan einen Thread; Funde werden gemeldet und optional automatisch in
+Quarantäne verschoben (`auto_quarantine`, Default: nur melden).
+
+```json
+{
+  "schedules": [
+    { "every_secs": 86400, "path": "/Users/ich/Downloads", "label": "Täglich Downloads" },
+    { "every_secs": 604800, "full": true, "auto_quarantine": true, "label": "Wöchentlicher Vollscan" }
+  ],
+  "full_scan_paths": ["/Users/ich"]
+}
+```
+
+Autostart des Dienstes (systemd/launchd) und das GUI-Tray:
+siehe [`platform/README.md`](./platform/README.md).
 
 Integrationstest gegen laufenden clamd:
 

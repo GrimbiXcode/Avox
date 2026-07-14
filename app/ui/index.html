@@ -42,12 +42,26 @@
 
       <!-- Scan -->
       <section class="panel">
-        <h2>Scan</h2>
+        <div class="panel-head">
+          <h2>Scan</h2>
+          <button id="btn-fullscan" class="btn btn-ghost">Vollständiger Scan</button>
+        </div>
         <div class="scan-row">
           <input id="scan-path" type="text" placeholder="Pfad zu Datei oder Ordner (z. B. /Users/…/Downloads)" />
           <button id="btn-scan" class="btn btn-primary">Scannen</button>
         </div>
         <div id="scan-result" class="result" hidden></div>
+      </section>
+
+      <!-- Geplante Scans -->
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Geplante Scans</h2>
+          <button id="btn-refresh-s" class="btn btn-ghost">Neu laden</button>
+        </div>
+        <div id="schedule-list" class="qlist">
+          <p class="muted">–</p>
+        </div>
       </section>
 
       <!-- Quarantäne -->
