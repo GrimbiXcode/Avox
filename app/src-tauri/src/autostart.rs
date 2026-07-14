@@ -31,27 +31,23 @@ const CLAMD_ADDR: &str = "127.0.0.1:3310";
 /// Gibt `true` zurück, wenn der Dienst danach erreichbar ist; sonst soll der
 /// Aufrufer die Binary direkt starten (Fallback).
 pub fn ensure_avox_service(bundled: Option<&Path>) -> bool {
-    if service_reachable() {
-        return true;
-    }
     // Binary an einen stabilen Ort kopieren (Bundle-Pfad ändert sich bei Updates).
     let Some(dir) = data_dir() else {
-        return false;
+        return service_reachable();
     };
     let stable = dir.join(service_bin_name());
-    match bundled {
-        Some(src) => {
-            if copy_if_different(src, &stable).is_err() {
-                return false;
-            }
-        }
-        None if !stable.exists() => return false,
-        None => {}
+    // `true`, wenn die Binary gerade aktualisiert wurde → Autostart muss neu laden,
+    // damit die neue Version auch wirklich läuft.
+    let binary_changed = match bundled {
+        Some(src) => copy_if_different(src, &stable).unwrap_or(false),
+        None => false,
+    };
+    if !stable.exists() {
+        return service_reachable();
     }
 
-    if install_avox_service_autostart(&stable) {
-        wait_for(service_reachable);
-    }
+    install_avox_service_autostart(&stable, binary_changed);
+    wait_for(service_reachable);
     service_reachable()
 }
 
@@ -165,12 +161,13 @@ enum Schedule {
 }
 
 #[cfg(target_os = "macos")]
-fn install_avox_service_autostart(bin: &Path) -> bool {
+fn install_avox_service_autostart(bin: &Path, force_reload: bool) -> bool {
     launchd_install(
         "org.avox.service",
         &[bin.to_string_lossy().into_owned(), "serve".into()],
         Schedule::KeepAlive,
         "/tmp/avox-service.log",
+        force_reload,
     )
 }
 
@@ -197,6 +194,7 @@ fn macos_ensure_engine() {
                     ],
                     Schedule::KeepAlive,
                     "/tmp/clamd.log",
+                    false,
                 );
             }
             _ => eprintln!(
@@ -219,6 +217,7 @@ fn macos_ensure_engine() {
                     ],
                     Schedule::Interval(21600),
                     "/tmp/freshclam.log",
+                    false,
                 );
             }
             _ => eprintln!(
@@ -237,13 +236,17 @@ fn launchctl_is_loaded(label: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Schreibt eine LaunchAgent-Plist und lädt sie (nur wenn nicht bereits geladen).
-/// Gibt `true` bei (vermutetem) Erfolg zurück.
+/// Schreibt eine LaunchAgent-Plist und lädt sie. Neu geladen wird nur, wenn die
+/// Plist sich geändert hat, `force_reload` gesetzt ist (z. B. aktualisierte Binary)
+/// oder der Agent noch nicht läuft. Gibt `true` bei (vermutetem) Erfolg zurück.
 #[cfg(target_os = "macos")]
-fn launchd_install(label: &str, args: &[String], schedule: Schedule, log: &str) -> bool {
-    if launchctl_is_loaded(label) {
-        return true;
-    }
+fn launchd_install(
+    label: &str,
+    args: &[String],
+    schedule: Schedule,
+    log: &str,
+    force_reload: bool,
+) -> bool {
     let Some(home) = home() else {
         return false;
     };
@@ -252,14 +255,38 @@ fn launchd_install(label: &str, args: &[String], schedule: Schedule, log: &str) 
         return false;
     }
     let plist_path = agents.join(format!("{label}.plist"));
-    if std::fs::write(&plist_path, launchd_plist(label, args, &schedule, log)).is_err() {
-        return false;
+    let content = launchd_plist(label, args, &schedule, log);
+    let plist_changed = match write_if_different(&plist_path, content.as_bytes()) {
+        Ok(changed) => changed,
+        Err(_) => return false,
+    };
+    let loaded = launchctl_is_loaded(label);
+    if plist_changed || force_reload || !loaded {
+        let plist_str = plist_path.to_string_lossy();
+        if loaded {
+            let _ = Command::new("launchctl")
+                .args(["unload", &plist_str])
+                .output();
+        }
+        let _ = Command::new("launchctl")
+            .args(["load", "-w", &plist_str])
+            .output();
+        eprintln!("LaunchAgent eingerichtet/aktualisiert: {label}");
     }
-    let _ = Command::new("launchctl")
-        .args(["load", "-w", &plist_path.to_string_lossy()])
-        .output();
-    eprintln!("LaunchAgent eingerichtet: {label}");
     true
+}
+
+/// Schreibt `contents` nach `path`, wenn abweichend. Gibt `true` bei Änderung zurück.
+#[cfg(target_os = "macos")]
+fn write_if_different(path: &Path, contents: &[u8]) -> std::io::Result<bool> {
+    let need = match std::fs::read(path) {
+        Ok(existing) => existing != contents,
+        Err(_) => true,
+    };
+    if need {
+        std::fs::write(path, contents)?;
+    }
+    Ok(need)
 }
 
 #[cfg(target_os = "macos")]
@@ -338,7 +365,7 @@ fn find_clamav_config(filename: &str) -> Option<PathBuf> {
 // ---------------------------------------------------------------------------
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn install_avox_service_autostart(bin: &Path) -> bool {
+fn install_avox_service_autostart(bin: &Path, force_reload: bool) -> bool {
     let Some(home) = home() else {
         return false;
     };
@@ -370,6 +397,12 @@ fn install_avox_service_autostart(bin: &Path) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
+    if ok && force_reload {
+        // Aktualisierte Binary aktiv werden lassen.
+        let _ = Command::new("systemctl")
+            .args(["--user", "restart", "avox-service.service"])
+            .output();
+    }
     if ok {
         eprintln!("systemd-User-Unit eingerichtet: avox-service.service");
     }
@@ -381,7 +414,9 @@ fn install_avox_service_autostart(bin: &Path) -> bool {
 // ---------------------------------------------------------------------------
 
 #[cfg(windows)]
-fn install_avox_service_autostart(bin: &Path) -> bool {
+fn install_avox_service_autostart(bin: &Path, _force_reload: bool) -> bool {
+    // Die Aufgabe wird ohnehin per /f neu erstellt und per /run gestartet, daher
+    // ist eine gesonderte Reload-Behandlung nicht nötig.
     let tr = format!("\"{}\" serve", bin.display());
     // /f überschreibt eine bestehende Aufgabe; /rl LIMITED = normale Nutzerrechte.
     let created = Command::new("schtasks")

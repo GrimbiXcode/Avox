@@ -87,8 +87,11 @@ impl Config {
             quarantine_dir: env::var("AVOX_QUARANTINE_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| default_quarantine_dir()),
-            freshclam_bin: env::var("AVOX_FRESHCLAM").unwrap_or_else(|_| "freshclam".to_string()),
-            freshclam_conf: env::var("AVOX_FRESHCLAM_CONF").ok().map(PathBuf::from),
+            freshclam_bin: env::var("AVOX_FRESHCLAM").unwrap_or_else(|_| default_freshclam_bin()),
+            freshclam_conf: env::var("AVOX_FRESHCLAM_CONF")
+                .ok()
+                .map(PathBuf::from)
+                .or_else(default_freshclam_conf),
             schedules: file.schedules,
             full_scan_paths,
         }
@@ -152,6 +155,37 @@ fn default_quarantine_dir() -> PathBuf {
     } else {
         env::temp_dir().join("avox-quarantine")
     }
+}
+
+/// Ermittelt die `freshclam`-Binary. Der Dienst läuft oft unter launchd/systemd mit
+/// minimalem `PATH`, daher suchen wir absolute Standardpfade, bevor wir auf den
+/// Namen (PATH-Auflösung) zurückfallen.
+fn default_freshclam_bin() -> String {
+    let candidates = [
+        "/opt/homebrew/bin/freshclam",
+        "/usr/local/bin/freshclam",
+        "/usr/bin/freshclam",
+        "/opt/local/bin/freshclam",
+        r"C:\Program Files\ClamAV\freshclam.exe",
+    ];
+    for c in candidates {
+        if std::path::Path::new(c).exists() {
+            return c.to_string();
+        }
+    }
+    "freshclam".to_string() // Fallback: über PATH
+}
+
+/// Sucht eine vorhandene `freshclam.conf` in den üblichen Verzeichnissen.
+fn default_freshclam_conf() -> Option<PathBuf> {
+    let candidates = [
+        "/opt/homebrew/etc/clamav/freshclam.conf",
+        "/usr/local/etc/clamav/freshclam.conf",
+        "/etc/clamav/freshclam.conf",
+        "/opt/local/etc/clamav/freshclam.conf",
+        r"C:\Program Files\ClamAV\freshclam.conf",
+    ];
+    candidates.iter().map(PathBuf::from).find(|p| p.exists())
 }
 
 /// Formatiert ein Intervall grob menschlesbar (Tage/Stunden/Minuten/Sekunden).
