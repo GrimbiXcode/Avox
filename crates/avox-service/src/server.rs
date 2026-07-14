@@ -38,6 +38,7 @@ pub fn run(config: Config) -> std::io::Result<()> {
 fn handle_connection(conn: Box<dyn transport::Stream>, cfg: Config) -> std::io::Result<()> {
     let mut reader = BufReader::new(conn);
     while let Some(env) = transport::read_msg::<_, RequestEnvelope>(&mut reader)? {
+        eprintln!("[ipc] #{} {}", env.id, request_label(&env.request));
         let response = dispatch(&cfg, env.request);
         let out = ResponseEnvelope {
             id: env.id,
@@ -47,6 +48,21 @@ fn handle_connection(conn: Box<dyn transport::Stream>, cfg: Config) -> std::io::
         transport::write_msg(reader.get_mut(), &out)?;
     }
     Ok(())
+}
+
+/// Kurzes Log-Label für eine Anfrage (ohne sensible Details aufzublähen).
+fn request_label(request: &Request) -> String {
+    match request {
+        Request::Ping => "Ping".to_string(),
+        Request::GetVersion => "GetVersion".to_string(),
+        Request::Scan { path } => format!("Scan {}", path.display()),
+        Request::ApplyAction { path, action } => {
+            format!("ApplyAction {action:?} {}", path.display())
+        }
+        Request::ListQuarantine => "ListQuarantine".to_string(),
+        Request::RestoreQuarantine { id } => format!("RestoreQuarantine {id}"),
+        Request::UpdateSignatures => "UpdateSignatures".to_string(),
+    }
 }
 
 /// Bildet eine Anfrage auf eine Antwort ab. Fehler werden zu [`Response::Error`],
