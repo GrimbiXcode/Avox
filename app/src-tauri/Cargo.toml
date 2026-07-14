@@ -1,6 +1,6 @@
 [package]
 name = "avox-app"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 description = "Avox — grafische Oberfläche (Tauri v2)"
 license = "GPL-2.0-only"
