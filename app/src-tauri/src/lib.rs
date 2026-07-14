@@ -9,6 +9,8 @@
 //! Dienst hängt oder ein Scan lange dauert, friert das Fenster nicht ein.
 
 use std::io::BufReader;
+use std::path::PathBuf;
+use std::time::Duration;
 
 use avox_core::{QuarantineEntry, ScanReport, ScheduleInfo, ThreatAction};
 use avox_ipc::transport::{self, Endpoint};
@@ -152,6 +154,7 @@ async fn update_signatures() -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            ensure_service_running(app.handle());
             build_tray(app.handle())?;
             Ok(())
         })
@@ -169,6 +172,58 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("Fehler beim Starten der Avox-Anwendung");
+}
+
+/// Stellt sicher, dass der Avox-Dienst läuft: ist er nicht erreichbar, wird die
+/// **mitgelieferte** `avox-service`-Binary gestartet. So muss der Nutzer den Dienst
+/// nicht manuell starten. (Voraussetzung bleibt ein laufender `clamd`.)
+fn ensure_service_running(app: &tauri::AppHandle) {
+    // Schon erreichbar? Dann nichts tun.
+    if transport::connect(&endpoint()).is_ok() {
+        return;
+    }
+    let Some(bin) = bundled_service_path(app) else {
+        eprintln!("avox-service nicht gefunden — bitte manuell `avox-service serve` starten");
+        return;
+    };
+    match std::process::Command::new(&bin).arg("serve").spawn() {
+        Ok(_) => {
+            eprintln!("avox-service gestartet: {}", bin.display());
+            // Kurz warten, bis der Dienst lauscht, damit die GUI beim ersten
+            // Laden bereits verbinden kann.
+            for _ in 0..30 {
+                if transport::connect(&endpoint()).is_ok() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        Err(e) => eprintln!(
+            "Start von avox-service fehlgeschlagen ({}): {e}",
+            bin.display()
+        ),
+    }
+}
+
+/// Sucht die mitgelieferte `avox-service`-Binary (Bundle-Ressource; Dev-Fallback
+/// neben der App-Binary).
+fn bundled_service_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let name = if cfg!(windows) {
+        "avox-service.exe"
+    } else {
+        "avox-service"
+    };
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(res) = app.path().resource_dir() {
+        candidates.push(res.join("resources").join(name));
+        candidates.push(res.join(name));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join(name));
+        }
+    }
+    candidates.into_iter().find(|p| p.exists())
 }
 
 /// Baut das System-Tray-Icon mit Kontextmenü (Öffnen / Beenden).

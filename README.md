@@ -3,8 +3,9 @@
 **Benutzerfreundlicher, quelloffener Antivirus auf Basis von [ClamAV](https://www.clamav.net/)**
 mit grafischer Oberfläche für **Windows, macOS und Linux** (amd64, arm64, 32-Bit).
 
-> Status: **Frühe Entwicklung (Skelett / M0–M1).** Noch nicht für den produktiven
-> Einsatz gedacht. Siehe [`PLAN.md`](./PLAN.md) für Vision, Architektur und Roadmap.
+> Status: **v0.1.0** — Scan, Quarantäne (mit Wiederherstellung), Zeitpläne,
+> Signatur-Updates und GUI mit Tray. Noch unsigniert/nicht notarisiert. Siehe
+> [`PLAN.md`](./PLAN.md) für Vision, Architektur und Roadmap.
 
 ## Architektur (Kurzfassung)
 
@@ -26,6 +27,39 @@ Details: [`PLAN.md`](./PLAN.md).
 | `avox-engine` | clamd-IPC-Client (Ping, Version, Scan) |
 | `avox-service` | Privilegierter Dienst: IPC-Server, Quarantäne, freshclam |
 | `app/` | **Tauri-v2-GUI** (Dashboard, Scan, Quarantäne) — [Details](./app/README.md) |
+
+## Voraussetzung: ClamAV (`clamd`)
+
+Avox nutzt die ClamAV-Engine über den Daemon **`clamd`** — dieser muss laufen (mit
+aktuellen Signaturen). Die GUI startet den Avox-Dienst selbst, aber **`clamd` musst
+du einmalig installieren und starten.**
+
+**macOS (Homebrew):**
+```bash
+brew install clamav
+# Konfiguration anlegen (Beispiele aus den .sample-Dateien):
+cp /opt/homebrew/etc/clamav/freshclam.conf.sample /opt/homebrew/etc/clamav/freshclam.conf
+cp /opt/homebrew/etc/clamav/clamd.conf.sample     /opt/homebrew/etc/clamav/clamd.conf
+# in beiden die Zeile "Example" auskommentieren/entfernen; in clamd.conf setzen:
+#   TCPSocket 3310
+#   TCPAddr 127.0.0.1
+mkdir -p /opt/homebrew/var/run/clamav /opt/homebrew/var/log/clamav
+freshclam                       # Signaturen laden
+clamd                           # Daemon starten
+```
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo apt install clamav clamav-daemon clamav-freshclam
+sudo systemctl enable --now clamav-freshclam clamav-daemon
+```
+
+**Windows:** ClamAV-Installer von [clamav.net/downloads](https://www.clamav.net/downloads)
+laden, `clamd.conf` mit `TCPSocket 3310` / `TCPAddr 127.0.0.1` einrichten, `freshclam`
+ausführen und `clamd` als Dienst starten.
+
+Ausführliche, reproduzierbare Schritt-für-Schritt-Anleitung (macOS): siehe
+[`docs/dev-setup.md`](./docs/dev-setup.md).
 
 ## Schnellstart (Entwicklung)
 

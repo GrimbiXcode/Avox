@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "identifier": "org.avox.desktop",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../ui",
+    "beforeBuildCommand": "node prepare-service.mjs",
+    "beforeDevCommand": "node prepare-service.mjs"
   },
   "app": {
     "withGlobalTauri": true,
@@ -25,6 +27,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": ["resources/avox-service*"],
     "category": "Utility",
     "copyright": "© 2026 Avox Contributors — GPL-2.0-only",
     "shortDescription": "Open-Source-Antivirus auf ClamAV-Basis",

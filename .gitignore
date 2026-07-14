@@ -9,6 +9,8 @@ dist/
 .vite/
 app/src-tauri/target/
 app/src-tauri/gen/
+app/src-tauri/resources/avox-service
+app/src-tauri/resources/avox-service.exe
 
 # Signaturen / lokale Laufzeitdaten (nie committen)
 *.cvd
